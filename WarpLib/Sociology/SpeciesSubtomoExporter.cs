@@ -166,13 +166,14 @@ public sealed class SpeciesSubtomoExporter
             throw new InvalidOperationException($"Species '{species.Name}' has no particles associated with tilt series.");
 
         List<string> outputFiles = new() { outputStarPath, mappingPath };
-        outputFiles.AddRange(plans.SelectMany(p => p.SubtomoPaths));
-        outputFiles.AddRange(plans.SelectMany(p => p.CtfPaths));
-        outputFiles.AddRange(plans.Select(p => Path.Combine(p.Series.SubtomoDir,
+        outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.SubtomoPaths));
+        outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.CtfPaths));
+        outputFiles.AddRange(System.Linq.Enumerable.Select(plans, p => Path.Combine(p.Series.SubtomoDir,
             $"{p.Series.RootName}{p.ExportOptions.Suffix}_{p.ExportOptions.BinnedPixelSizeMean:F2}A_average.mrc")));
         if (!options.Overwrite)
         {
-            string[] existing = outputFiles.Where(File.Exists).Distinct().ToArray();
+            string[] existing = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Distinct(
+                System.Linq.Enumerable.Where(outputFiles, File.Exists)));
             if (existing.Length > 0)
                 throw new IOException("Refusing to overwrite existing export files. Use --overwrite to replace them:\n" +
                                       string.Join("\n", existing));
@@ -239,21 +240,22 @@ public sealed class SpeciesSubtomoExporter
 
     private static Species ResolveSpecies(Population population, string selector)
     {
-        Species[] species = population.Species.SelectMany(s => s.AllDescendants).ToArray();
+        Species[] species = System.Linq.Enumerable.ToArray(
+            System.Linq.Enumerable.SelectMany(population.Species, s => s.AllDescendants));
         string fullSelectorPath = Path.GetFullPath(selector);
-        Species[] matches = species.Where(s =>
+        Species[] matches = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(species, s =>
             s.Name == selector ||
             s.GUID.ToString().Equals(selector, StringComparison.OrdinalIgnoreCase) ||
-            Path.GetFullPath(s.Path) == fullSelectorPath).ToArray();
+            Path.GetFullPath(s.Path) == fullSelectorPath));
 
         if (matches.Length == 1)
             return matches[0];
         if (matches.Length > 1)
             throw new InvalidOperationException($"More than one species matched '{selector}':\n" +
-                                                string.Join("\n", matches.Select(s => $"  {s.Name} ({s.GUID}) {s.Path}")));
+                                                string.Join("\n", System.Linq.Enumerable.Select(matches, s => $"  {s.Name} ({s.GUID}) {s.Path}")));
 
         throw new InvalidOperationException($"No species matched '{selector}'. Available species:\n" +
-                                            string.Join("\n", species.Select(s => $"  {s.Name} ({s.GUID}) {s.Path}")));
+                                            string.Join("\n", System.Linq.Enumerable.Select(species, s => $"  {s.Name} ({s.GUID}) {s.Path}")));
     }
 
     private static List<SourcePlan> BuildPlans(Population population, Species species, Particle[] allParticles,
@@ -284,12 +286,10 @@ public sealed class SpeciesSubtomoExporter
         }
 
         List<SourcePlan> result = new();
-        foreach (var group in groups.OrderBy(g => g.Key, StringComparer.Ordinal))
+        foreach (var group in System.Linq.Enumerable.OrderBy(groups, g => g.Key, StringComparer.Ordinal))
         {
             if (!sources.TryGetValue(group.Key, out var sourceFile))
                 throw new InvalidOperationException($"No tilt-series source exists for SourceHash '{group.Key}'.");
-            if (!File.Exists(sourceFile.Path))
-                throw new FileNotFoundException($"Tilt-series metadata file does not exist for SourceHash '{group.Key}'.", sourceFile.Path);
 
             TiltSeries series = new TiltSeries(sourceFile.Path);
             if (series.GetDataHash() != group.Key)
@@ -298,16 +298,17 @@ public sealed class SpeciesSubtomoExporter
                 throw new InvalidOperationException($"Tilt series '{series.Name}' contains no tilts.");
             if (series.Dose == null || series.Dose.Length != series.NTilts)
                 throw new InvalidOperationException($"Tilt series '{series.Name}' has invalid dose metadata.");
-            string[] missingTiltMovies = series.TiltMoviePaths
-                .Select(path => Path.Combine(series.DataOrProcessingDirectoryName, path))
-                .Where(path => !File.Exists(path))
-                .ToArray();
+            string[] missingTiltMovies = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(
+                System.Linq.Enumerable.Select(series.TiltMoviePaths,
+                    path => new Movie(Path.Combine(series.DataOrProcessingDirectoryName, path)).DataPath),
+                path => !File.Exists(path)));
             if (missingTiltMovies.Length > 0)
                 throw new FileNotFoundException($"Tilt series '{series.Name}' references missing tilt movie(s):\n" +
                                                 string.Join("\n", missingTiltMovies));
 
             int[] particleIndices = group.Value.ToArray();
-            Particle[] particles = particleIndices.Select(i => allParticles[i]).ToArray();
+            Particle[] particles = System.Linq.Enumerable.ToArray(
+                System.Linq.Enumerable.Select(particleIndices, i => allParticles[i]));
             decimal outputPixelSize = options.OutputPixelSize ?? species.PixelSize;
             int nTilts = options.NTilts ?? series.NTilts;
             if (sourceFile.Source.FrameLimit > 0)
@@ -340,10 +341,12 @@ public sealed class SpeciesSubtomoExporter
 
             (float3[] positions, float3[] angles) = BuildTrajectoryArrays(
                 particles, GetInterpolationSteps(series.Dose), options.PrerotateParticles, options.AdditionalShiftAngstrom);
-            string[] subtomoPaths = Enumerable.Range(0, particles.Length).Select(p => Path.Combine(series.SubtomoDir,
-                $"{series.RootName}{exportOptions.Suffix}_{p:D7}_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")).ToArray();
-            string[] ctfPaths = Enumerable.Range(0, particles.Length).Select(p => Path.Combine(series.SubtomoDir,
-                $"{series.RootName}{exportOptions.Suffix}_{p:D7}_ctf_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")).ToArray();
+            string[] subtomoPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(series.SubtomoDir,
+                    $"{series.RootName}{exportOptions.Suffix}_{p:D7}_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")));
+            string[] ctfPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(series.SubtomoDir,
+                    $"{series.RootName}{exportOptions.Suffix}_{p:D7}_ctf_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")));
 
             result.Add(new SourcePlan
             {
@@ -375,7 +378,7 @@ public sealed class SpeciesSubtomoExporter
         TaskQueue queue = new(layout);
         queue.Clear();
         WorkPool pool = new(layout, queue);
-        List<TaskItem> tasks = plans.Select((plan, i) =>
+        List<TaskItem> tasks = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Select(plans, (plan, i) =>
         {
             TaskItem task = new()
             {
@@ -386,7 +389,7 @@ public sealed class SpeciesSubtomoExporter
             };
             task.ComputeInitFingerprint();
             return task;
-        }).ToList();
+        }));
 
         Directory.CreateDirectory(logDirectory);
         LocalProvisioner provisioner = new(layout.Root, devices.ToArray(), options.ProcessesPerDevice, logDir: logDirectory);
@@ -409,7 +412,8 @@ public sealed class SpeciesSubtomoExporter
                 status?.Invoke($"[{done}/{plans.Count}] {plan.Series.RootName}: {plan.Particles.Length} particles");
             }, pollMs: 500);
 
-            WorkResult failed = results.Values.FirstOrDefault(r => r.Outcome != WorkOutcome.Done);
+            WorkResult failed = System.Linq.Enumerable.FirstOrDefault(results.Values,
+                r => r.Outcome != WorkOutcome.Done);
             if (failed != null)
                 throw new InvalidOperationException($"Export task '{failed.TaskId}' failed: {failed.Error}");
         }
@@ -426,9 +430,9 @@ public sealed class SpeciesSubtomoExporter
     {
         int gpuCount = GPU.GetDeviceCount();
         List<int> devices = requestedDevices == null || requestedDevices.Count == 0
-            ? Helper.ArrayOfSequence(0, gpuCount, 1).ToList()
-            : requestedDevices.Distinct().ToList();
-        if (devices.Count == 0 || devices.Any(d => d < 0 || d >= gpuCount))
+            ? new List<int>(Helper.ArrayOfSequence(0, gpuCount, 1))
+            : System.Linq.Enumerable.ToList(System.Linq.Enumerable.Distinct(requestedDevices));
+        if (devices.Count == 0 || System.Linq.Enumerable.Any(devices, d => d < 0 || d >= gpuCount))
             throw new ArgumentException($"--device_list must contain unique GPU IDs between 0 and {gpuCount - 1}.");
         return devices;
     }
