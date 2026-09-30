@@ -392,13 +392,16 @@ public sealed class SpeciesSubtomoExporter
             if (options.Output2D)
             {
                 series.VolumeDimensionsPhysical = exportOptions.DimensionsPhysical;
-                List<int> retained = Enumerable.Range(0, particles.Length).Where(p =>
-                    !RelionParticleSeriesExport.ShouldExcludeParticle(GetVisibility(series, exportOptions,
-                        positions.Skip(p * series.NTilts).Take(series.NTilts).ToArray()), options.MaxMissingTilts)).ToList();
+                List<int> retained = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(
+                    System.Linq.Enumerable.Range(0, particles.Length), p =>
+                        !RelionParticleSeriesExport.ShouldExcludeParticle(GetVisibility(series, exportOptions,
+                            System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Take(
+                                System.Linq.Enumerable.Skip(positions, p * series.NTilts), series.NTilts))),
+                            options.MaxMissingTilts)));
                 if (retained.Count == 0)
                     continue;
-                particles = retained.Select(p => particles[p]).ToArray();
-                particleIndices = retained.Select(p => particleIndices[p]).ToArray();
+                particles = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(retained, p => particles[p]));
+                particleIndices = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(retained, p => particleIndices[p]));
                 (positions, angles) = BuildTrajectoryArrays(particles, GetInterpolationSteps(series.Dose),
                     options.PrerotateParticles, options.AdditionalShiftAngstrom);
             }
@@ -424,8 +427,9 @@ public sealed class SpeciesSubtomoExporter
                 SubtomoDirectory = subtomoDirectory,
                 ParticleSeriesDirectory = particleSeriesDirectory,
                 ParticleTablePath = Path.Combine(particleSeriesDirectory, series.RootName + "_temp.star"),
-                ParticleSeriesPaths = Enumerable.Range(0, particles.Length).Select(p => Path.Combine(particleSeriesDirectory,
-                    $"{series.RootName}_{exportOptions.BinnedPixelSizeMean:F2}A_{p + 1:D6}.mrcs")).ToArray()
+                ParticleSeriesPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+                    System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(particleSeriesDirectory,
+                        $"{series.RootName}_{exportOptions.BinnedPixelSizeMean:F2}A_{p + 1:D6}.mrcs")))
             });
         }
         return result;
@@ -513,16 +517,20 @@ public sealed class SpeciesSubtomoExporter
     private static string GetVisibility(TiltSeries series, ProcessingOptionsTomoSubReconstruction options,
                                         float3[] positions)
     {
-        bool[] visibility = series.GetPositionInAllTilts(positions).Select(p =>
-            p.X > options.ParticleDiameter / 2 && p.X < series.ImageDimensionsPhysical.X - options.ParticleDiameter / 2 &&
-            p.Y > options.ParticleDiameter / 2 && p.Y < series.ImageDimensionsPhysical.Y - options.ParticleDiameter / 2).ToArray();
+        bool[] visibility = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+            series.GetPositionInAllTilts(positions), p =>
+                p.X > options.ParticleDiameter / 2 && p.X < series.ImageDimensionsPhysical.X - options.ParticleDiameter / 2 &&
+                p.Y > options.ParticleDiameter / 2 && p.Y < series.ImageDimensionsPhysical.Y - options.ParticleDiameter / 2));
         for (int tilt = 0; tilt < visibility.Length; tilt++)
             visibility[tilt] &= series.UseTilt[tilt];
-        return "[" + string.Join(',', GetUsedTiltIndices(series, options).Select(tilt => visibility[tilt] ? "1" : "0")) + "]";
+        return "[" + string.Join(',', System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+            GetUsedTiltIndices(series, options), tilt => visibility[tilt] ? "1" : "0"))) + "]";
     }
 
     private static IEnumerable<int> GetUsedTiltIndices(TiltSeries series, ProcessingOptionsTomoSubReconstruction options) =>
-        options.DoLimitDose ? series.IndicesSortedDose.Take(options.NTilts).OrderBy(i => i) : series.IndicesSortedDose.OrderBy(i => i);
+        options.DoLimitDose
+            ? System.Linq.Enumerable.OrderBy(System.Linq.Enumerable.Take(series.IndicesSortedDose, options.NTilts), i => i)
+            : System.Linq.Enumerable.OrderBy(series.IndicesSortedDose, i => i);
 
     private static void Build2DOutputStars(IEnumerable<SourcePlan> plans, string outputStarPath, Options options)
     {
@@ -546,16 +554,27 @@ public sealed class SpeciesSubtomoExporter
                 plan.Particles[i].AnglesMean.Y.ToString("F3", CultureInfo.InvariantCulture));
             particles.ModifyAllValuesInColumn("rlnAnglePsi", (_, i) =>
                 plan.Particles[i].AnglesMean.Z.ToString("F3", CultureInfo.InvariantCulture));
-            string[] randomSubsets = plan.Particles.Select(p =>
-                (p.RandomSubset + 1).ToString(CultureInfo.InvariantCulture)).ToArray();
+            string[] randomSubsets = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(plan.Particles, p =>
+                (p.RandomSubset + 1).ToString(CultureInfo.InvariantCulture)));
             if (particles.HasColumn("rlnRandomSubset"))
                 particles.ModifyAllValuesInColumn("rlnRandomSubset", (_, i) => randomSubsets[i]);
             else
                 particles.AddColumn("rlnRandomSubset", randomSubsets);
-            foreach (string column in plan.Particles.SelectMany(p => p.Extra?.Keys ?? Enumerable.Empty<string>()).Distinct())
+            HashSet<string> extraColumns = new();
+            foreach (Particle particle in plan.Particles)
+                if (particle.Extra != null)
+                    foreach (string column in particle.Extra.Keys)
+                        extraColumns.Add(column);
+            foreach (string column in extraColumns)
                 if (!particles.HasColumn(column))
-                    particles.AddColumn(column, plan.Particles.Select(p =>
-                        p.Extra != null && p.Extra.TryGetValue(column, out string value) ? value : "?").ToArray());
+                {
+                    string[] values = new string[plan.Particles.Length];
+                    for (int p = 0; p < plan.Particles.Length; p++)
+                        values[p] = plan.Particles[p].Extra != null && plan.Particles[p].Extra.TryGetValue(column, out string value)
+                            ? value
+                            : "?";
+                    particles.AddColumn(column, values);
+                }
             if (particles.HasColumn("rlnCtfDataAreCtfPremultiplied"))
                 particles.ModifyAllValuesInColumn("rlnCtfDataAreCtfPremultiplied", _ => options.DontPremultiply ? "0" : "1");
 
@@ -590,8 +609,8 @@ public sealed class SpeciesSubtomoExporter
     private static Star Build2DTomogramsGlobal(SourcePlan plan, int opticsGroup)
     {
         List<int> doseOrderedTilts = plan.ExportOptions.DoLimitDose
-            ? plan.Series.IndicesSortedDose.Take(plan.ExportOptions.NTilts).ToList()
-            : plan.Series.IndicesSortedDose.ToList();
+            ? System.Linq.Enumerable.ToList(System.Linq.Enumerable.Take(plan.Series.IndicesSortedDose, plan.ExportOptions.NTilts))
+            : System.Linq.Enumerable.ToList(plan.Series.IndicesSortedDose);
         float dose = doseOrderedTilts.Count > 1
             ? plan.Series.Dose[doseOrderedTilts[1]] - plan.Series.Dose[doseOrderedTilts[0]]
             : plan.Series.Dose[doseOrderedTilts[0]];
@@ -608,8 +627,10 @@ public sealed class SpeciesSubtomoExporter
         foreach (int tilt in GetUsedTilts(plan))
         {
             Matrix3 matrix = Matrix3.Euler(angles[tilt]);
-            float3 imageCoords = plan.Series.GetPositionsInOneTilt(new[] { plan.ExportOptions.DimensionsPhysical * 0.5f }, tilt).First();
-            CTF ctf = plan.Series.GetCTFParamsForOneTilt((float)plan.ExportOptions.PixelSize, new[] { imageCoords.Z }, new[] { imageCoords }, tilt, true).First();
+            float3 imageCoords = System.Linq.Enumerable.First(plan.Series.GetPositionsInOneTilt(
+                new[] { plan.ExportOptions.DimensionsPhysical * 0.5f }, tilt));
+            CTF ctf = System.Linq.Enumerable.First(plan.Series.GetCTFParamsForOneTilt(
+                (float)plan.ExportOptions.PixelSize, new[] { imageCoords.Z }, new[] { imageCoords }, tilt, true));
             table.AddRow(new[] { $"[{matrix.M11},{matrix.M12},{matrix.M13},0]", $"[{matrix.M21},{matrix.M22},{matrix.M23},0]", $"[{matrix.M31},{matrix.M32},{matrix.M33},0]", "[0,0,0,1]", ((ctf.Defocus + ctf.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture), ((ctf.Defocus - ctf.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture), ctf.DefocusAngle.ToString("F3", CultureInfo.InvariantCulture), RelionParticleSeriesExport.GetPhaseShiftDegrees(ctf.PhaseShift).ToString("F3", CultureInfo.InvariantCulture), ctf.Scale.ToString("F3", CultureInfo.InvariantCulture), plan.Series.Dose[tilt].ToString("F3", CultureInfo.InvariantCulture) });
         }
         return table;
@@ -618,8 +639,8 @@ public sealed class SpeciesSubtomoExporter
     private static List<int> GetUsedTilts(SourcePlan plan)
     {
         List<int> tilts = plan.ExportOptions.DoLimitDose
-            ? plan.Series.IndicesSortedDose.Take(plan.ExportOptions.NTilts).ToList()
-            : plan.Series.IndicesSortedDose.ToList();
+            ? System.Linq.Enumerable.ToList(System.Linq.Enumerable.Take(plan.Series.IndicesSortedDose, plan.ExportOptions.NTilts))
+            : System.Linq.Enumerable.ToList(plan.Series.IndicesSortedDose);
         tilts.Sort();
         return tilts;
     }
