@@ -27,6 +27,11 @@ public sealed class SpeciesSubtomoExporter
         public IReadOnlyList<int> Devices { get; init; }
         public int ProcessesPerDevice { get; init; } = 1;
         public string TaskDirectory { get; init; }
+        public string SubtomoDirectory { get; init; }
+        public bool Output2D { get; init; }
+        public string ParticleSeriesDirectory { get; init; }
+        public bool DontPremultiply { get; init; }
+        public int MaxMissingTilts { get; init; } = 5;
         public decimal? OutputPixelSize { get; init; }
         public int? BoxSize { get; init; }
         public int? Diameter { get; init; }
@@ -65,6 +70,10 @@ public sealed class SpeciesSubtomoExporter
         public float3[] Angles { get; init; }
         public string[] SubtomoPaths { get; init; }
         public string[] CtfPaths { get; init; }
+        public string SubtomoDirectory { get; init; }
+        public string ParticleSeriesDirectory { get; init; }
+        public string ParticleTablePath { get; init; }
+        public string[] ParticleSeriesPaths { get; init; }
     }
 
     private sealed class MappingFile
@@ -166,10 +175,24 @@ public sealed class SpeciesSubtomoExporter
             throw new InvalidOperationException($"Species '{species.Name}' has no particles associated with tilt series.");
 
         List<string> outputFiles = new() { outputStarPath, mappingPath };
-        outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.SubtomoPaths));
-        outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.CtfPaths));
-        outputFiles.AddRange(System.Linq.Enumerable.Select(plans, p => Path.Combine(p.Series.SubtomoDir,
-            $"{p.Series.RootName}{p.ExportOptions.Suffix}_{p.ExportOptions.BinnedPixelSizeMean:F2}A_average.mrc")));
+        if (options.Output2D)
+        {
+            outputFiles.Add(Path.Combine(Path.GetDirectoryName(outputStarPath)!,
+                Path.GetFileNameWithoutExtension(outputStarPath) + "_tomograms.star"));
+            outputFiles.Add(Path.Combine(Path.GetDirectoryName(outputStarPath)!,
+                Path.GetFileNameWithoutExtension(outputStarPath) + "_optimisation_set.star"));
+            outputFiles.Add(Path.Combine(Path.GetDirectoryName(outputStarPath)!, "dummy_tiltseries.mrc"));
+            outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.ParticleSeriesPaths));
+            outputFiles.AddRange(System.Linq.Enumerable.Select(plans, p => Path.Combine(p.ParticleSeriesDirectory,
+                $"{p.Series.RootName}_{p.ExportOptions.BinnedPixelSizeMean:F2}A_average.mrcs")));
+        }
+        else
+        {
+            outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.SubtomoPaths));
+            outputFiles.AddRange(System.Linq.Enumerable.SelectMany(plans, p => p.CtfPaths));
+            outputFiles.AddRange(System.Linq.Enumerable.Select(plans, p => Path.Combine(p.SubtomoDirectory,
+                $"{p.Series.RootName}{p.ExportOptions.Suffix}_{p.ExportOptions.BinnedPixelSizeMean:F2}A_average.mrc")));
+        }
         if (!options.Overwrite)
         {
             string[] existing = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Distinct(
@@ -184,14 +207,14 @@ public sealed class SpeciesSubtomoExporter
             PopulationPath = populationPath,
             SpeciesName = species.Name,
             SpeciesGuid = species.GUID,
-            ParticleCount = allParticles.Length,
+            ParticleCount = plans.Sum(plan => plan.Particles.Length),
             SourceCount = plans.Count,
             OutputStarPath = outputStarPath,
             MappingPath = mappingPath
         };
 
         status?.Invoke($"Species: {species.Name}");
-        status?.Invoke($"Particles: {allParticles.Length}");
+        status?.Invoke($"Particles: {result.ParticleCount}");
         status?.Invoke($"Sources: {plans.Count}");
         status?.Invoke($"Output angpix: {options.OutputPixelSize ?? species.PixelSize:F4}");
         status?.Invoke($"Box: {options.BoxSize ?? species.Size}");
@@ -212,9 +235,11 @@ public sealed class SpeciesSubtomoExporter
         Directory.CreateDirectory(Path.GetDirectoryName(outputStarPath)!);
         RunTasks(plans, options, status);
 
-        Star outputTable = BuildOutputStar(plans, outputStarPath, options.PrerotateParticles);
-        outputTable.Save(outputStarPath);
-        WriteMapping(mappingPath, populationPath, species, plans, outputStarPath);
+        if (options.Output2D)
+            Build2DOutputStars(plans, outputStarPath, options);
+        else
+            BuildOutputStar(plans, outputStarPath, options.PrerotateParticles).Save(outputStarPath);
+        WriteMapping(mappingPath, populationPath, species, plans, outputStarPath, options.Output2D);
         return result;
     }
 
@@ -234,8 +259,16 @@ public sealed class SpeciesSubtomoExporter
             throw new ArgumentException("--box must be even.");
         if (options.NTilts is <= 0)
             throw new ArgumentException("--ntilts must be positive when specified.");
+        if (options.MaxMissingTilts < 0)
+            throw new ArgumentException("--max_missing_tilts must not be negative.");
         if (options.ProcessesPerDevice < 1)
             throw new ArgumentException("--perdevice must be at least 1.");
+        if (options.Output2D && !string.IsNullOrWhiteSpace(options.SubtomoDirectory))
+            throw new ArgumentException("--subtomo_dir is only valid for 3D export.");
+        if (options.Output2D && (options.PrerotateParticles || options.MakeSparse || !options.NormalizeOutput))
+            throw new ArgumentException("--prerotate, --make_sparse, and --dont_normalize_output are only valid for 3D export.");
+        if (!options.Output2D && (!string.IsNullOrWhiteSpace(options.ParticleSeriesDirectory) || options.DontPremultiply || options.MaxMissingTilts != 5))
+            throw new ArgumentException("--particle_series_dir, --dont_premultiply, and --max_missing_tilts are only valid for 2D export.");
     }
 
     private static Species ResolveSpecies(Population population, string selector)
@@ -261,6 +294,12 @@ public sealed class SpeciesSubtomoExporter
     private static List<SourcePlan> BuildPlans(Population population, Species species, Particle[] allParticles,
                                                 Options options, string outputStarPath)
     {
+        string subtomoRoot = string.IsNullOrWhiteSpace(options.SubtomoDirectory)
+            ? null
+            : Path.GetFullPath(options.SubtomoDirectory);
+        string particleSeriesRoot = string.IsNullOrWhiteSpace(options.ParticleSeriesDirectory)
+            ? null
+            : Path.GetFullPath(options.ParticleSeriesDirectory);
         Dictionary<string, (DataSource Source, string Path)> sources = new();
         foreach (DataSource source in population.Sources)
         {
@@ -314,6 +353,12 @@ public sealed class SpeciesSubtomoExporter
             if (sourceFile.Source.FrameLimit > 0)
                 nTilts = Math.Min(nTilts, sourceFile.Source.FrameLimit);
             nTilts = Math.Min(nTilts, series.NTilts);
+            string subtomoDirectory = subtomoRoot == null
+                ? series.SubtomoDir
+                : Path.Combine(subtomoRoot, series.RootName);
+            string particleSeriesDirectory = particleSeriesRoot == null
+                ? Path.Combine(Path.GetDirectoryName(outputStarPath)!, "particle_series", series.RootName)
+                : Path.Combine(particleSeriesRoot, series.RootName);
 
             ProcessingOptionsTomoSubReconstruction exportOptions = new()
             {
@@ -336,16 +381,32 @@ public sealed class SpeciesSubtomoExporter
                 PrerotateParticles = options.PrerotateParticles,
                 DoLimitDose = options.LimitDose,
                 NTilts = nTilts,
-                MakeSparse = options.MakeSparse
+                MakeSparse = options.MakeSparse,
+                SubtomoOutputDirectory = subtomoDirectory,
+                ParticleSeriesOutputDirectory = particleSeriesDirectory,
+                DontPremultiply = options.DontPremultiply
             };
 
             (float3[] positions, float3[] angles) = BuildTrajectoryArrays(
                 particles, GetInterpolationSteps(series.Dose), options.PrerotateParticles, options.AdditionalShiftAngstrom);
+            if (options.Output2D)
+            {
+                series.VolumeDimensionsPhysical = exportOptions.DimensionsPhysical;
+                List<int> retained = Enumerable.Range(0, particles.Length).Where(p =>
+                    !RelionParticleSeriesExport.ShouldExcludeParticle(GetVisibility(series, exportOptions,
+                        positions.Skip(p * series.NTilts).Take(series.NTilts).ToArray()), options.MaxMissingTilts)).ToList();
+                if (retained.Count == 0)
+                    continue;
+                particles = retained.Select(p => particles[p]).ToArray();
+                particleIndices = retained.Select(p => particleIndices[p]).ToArray();
+                (positions, angles) = BuildTrajectoryArrays(particles, GetInterpolationSteps(series.Dose),
+                    options.PrerotateParticles, options.AdditionalShiftAngstrom);
+            }
             string[] subtomoPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
-                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(series.SubtomoDir,
+                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(subtomoDirectory,
                     $"{series.RootName}{exportOptions.Suffix}_{p:D7}_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")));
             string[] ctfPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
-                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(series.SubtomoDir,
+                System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(subtomoDirectory,
                     $"{series.RootName}{exportOptions.Suffix}_{p:D7}_ctf_{exportOptions.BinnedPixelSizeMean:F2}A.mrc")));
 
             result.Add(new SourcePlan
@@ -359,7 +420,12 @@ public sealed class SpeciesSubtomoExporter
                 Positions = positions,
                 Angles = angles,
                 SubtomoPaths = subtomoPaths,
-                CtfPaths = ctfPaths
+                CtfPaths = ctfPaths,
+                SubtomoDirectory = subtomoDirectory,
+                ParticleSeriesDirectory = particleSeriesDirectory,
+                ParticleTablePath = Path.Combine(particleSeriesDirectory, series.RootName + "_temp.star"),
+                ParticleSeriesPaths = Enumerable.Range(0, particles.Length).Select(p => Path.Combine(particleSeriesDirectory,
+                    $"{series.RootName}_{exportOptions.BinnedPixelSizeMean:F2}A_{p + 1:D6}.mrcs")).ToArray()
             });
         }
         return result;
@@ -385,7 +451,14 @@ public sealed class SpeciesSubtomoExporter
                 TaskId = $"{i + 1:D7}-export-{plan.Series.RootName}",
                 Stage = "export_subtomos",
                 RequiresGpu = true,
-                Main = new[] { WorkerCommands.TomoExportParticleSubtomos(plan.Series.Path, plan.ExportOptions, plan.Positions, plan.Angles) }
+                Main = new[]
+                {
+                    options.Output2D
+                        ? WorkerCommands.TomoExportParticleSeries(plan.Series.Path, plan.ExportOptions,
+                            plan.Positions, plan.Angles, outputStarPath, plan.ParticleTablePath)
+                        : WorkerCommands.TomoExportParticleSubtomos(plan.Series.Path, plan.ExportOptions,
+                            plan.Positions, plan.Angles)
+                }
             };
             task.ComputeInitFingerprint();
             return task;
@@ -437,6 +510,120 @@ public sealed class SpeciesSubtomoExporter
         return devices;
     }
 
+    private static string GetVisibility(TiltSeries series, ProcessingOptionsTomoSubReconstruction options,
+                                        float3[] positions)
+    {
+        bool[] visibility = series.GetPositionInAllTilts(positions).Select(p =>
+            p.X > options.ParticleDiameter / 2 && p.X < series.ImageDimensionsPhysical.X - options.ParticleDiameter / 2 &&
+            p.Y > options.ParticleDiameter / 2 && p.Y < series.ImageDimensionsPhysical.Y - options.ParticleDiameter / 2).ToArray();
+        for (int tilt = 0; tilt < visibility.Length; tilt++)
+            visibility[tilt] &= series.UseTilt[tilt];
+        return "[" + string.Join(',', GetUsedTiltIndices(series, options).Select(tilt => visibility[tilt] ? "1" : "0")) + "]";
+    }
+
+    private static IEnumerable<int> GetUsedTiltIndices(TiltSeries series, ProcessingOptionsTomoSubReconstruction options) =>
+        options.DoLimitDose ? series.IndicesSortedDose.Take(options.NTilts).OrderBy(i => i) : series.IndicesSortedDose.OrderBy(i => i);
+
+    private static void Build2DOutputStars(IEnumerable<SourcePlan> plans, string outputStarPath, Options options)
+    {
+        Dictionary<string, Star> tables = new();
+        int opticsGroup = 0;
+        foreach (SourcePlan plan in plans)
+        {
+            int group = ++opticsGroup;
+            Star particles = new(plan.ParticleTablePath);
+            particles.ModifyAllValuesInColumn("rlnOpticsGroup", _ => group.ToString(CultureInfo.InvariantCulture));
+            float pixelSize = (float)plan.ExportOptions.BinnedPixelSizeMean;
+            particles.ModifyAllValuesInColumn("rlnCoordinateX", (_, i) =>
+                (plan.Particles[i].CoordinatesMean.X / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+            particles.ModifyAllValuesInColumn("rlnCoordinateY", (_, i) =>
+                (plan.Particles[i].CoordinatesMean.Y / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+            particles.ModifyAllValuesInColumn("rlnCoordinateZ", (_, i) =>
+                (plan.Particles[i].CoordinatesMean.Z / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+            particles.ModifyAllValuesInColumn("rlnAngleRot", (_, i) =>
+                plan.Particles[i].AnglesMean.X.ToString("F3", CultureInfo.InvariantCulture));
+            particles.ModifyAllValuesInColumn("rlnAngleTilt", (_, i) =>
+                plan.Particles[i].AnglesMean.Y.ToString("F3", CultureInfo.InvariantCulture));
+            particles.ModifyAllValuesInColumn("rlnAnglePsi", (_, i) =>
+                plan.Particles[i].AnglesMean.Z.ToString("F3", CultureInfo.InvariantCulture));
+            string[] randomSubsets = plan.Particles.Select(p =>
+                (p.RandomSubset + 1).ToString(CultureInfo.InvariantCulture)).ToArray();
+            if (particles.HasColumn("rlnRandomSubset"))
+                particles.ModifyAllValuesInColumn("rlnRandomSubset", (_, i) => randomSubsets[i]);
+            else
+                particles.AddColumn("rlnRandomSubset", randomSubsets);
+            foreach (string column in plan.Particles.SelectMany(p => p.Extra?.Keys ?? Enumerable.Empty<string>()).Distinct())
+                if (!particles.HasColumn(column))
+                    particles.AddColumn(column, plan.Particles.Select(p =>
+                        p.Extra != null && p.Extra.TryGetValue(column, out string value) ? value : "?").ToArray());
+            if (particles.HasColumn("rlnCtfDataAreCtfPremultiplied"))
+                particles.ModifyAllValuesInColumn("rlnCtfDataAreCtfPremultiplied", _ => options.DontPremultiply ? "0" : "1");
+
+            tables.Add(plan.Series.RootName + "_particles", particles);
+            tables.Add(plan.Series.RootName + "_optics", Build2DOptics(plan, group, !options.DontPremultiply));
+            tables.Add(plan.Series.RootName + "_tomograms_global", Build2DTomogramsGlobal(plan, group));
+            tables.Add(plan.Series.RootName + "_tomograms_tiltseries", Build2DTomogramsTilts(plan));
+        }
+        RelionParticleSeriesExport.WriteOutputFiles(tables, outputStarPath, options.MaxMissingTilts, outputStarPath);
+        foreach (SourcePlan plan in plans)
+            File.Delete(plan.ParticleTablePath);
+    }
+
+    private static Star Build2DOptics(SourcePlan plan, int opticsGroup, bool premultiplied)
+    {
+        float pixelSize = (float)plan.ExportOptions.BinnedPixelSizeMean;
+        return new Star(new[]
+        {
+            new[] { opticsGroup.ToString(CultureInfo.InvariantCulture) }, new[] { $"opticsGroup{opticsGroup}" },
+            new[] { plan.Series.CTF.Cs.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Voltage.ToString("F3", CultureInfo.InvariantCulture) },
+            new[] { pixelSize.ToString("F5", CultureInfo.InvariantCulture) }, new[] { premultiplied ? "1" : "0" }, new[] { "2" },
+            new[] { "1.00000" }, new[] { pixelSize.ToString("F5", CultureInfo.InvariantCulture) },
+            new[] { plan.ExportOptions.BoxSize.ToString(CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture) }
+        }, new[]
+        {
+            "rlnOpticsGroup", "rlnOpticsGroupName", "rlnSphericalAberration", "rlnVoltage",
+            "rlnTomoTiltSeriesPixelSize", "rlnCtfDataAreCtfPremultiplied", "rlnImageDimensionality",
+            "rlnTomoSubtomogramBinning", "rlnImagePixelSize", "rlnImageSize", "rlnAmplitudeContrast"
+        });
+    }
+
+    private static Star Build2DTomogramsGlobal(SourcePlan plan, int opticsGroup)
+    {
+        List<int> doseOrderedTilts = plan.ExportOptions.DoLimitDose
+            ? plan.Series.IndicesSortedDose.Take(plan.ExportOptions.NTilts).ToList()
+            : plan.Series.IndicesSortedDose.ToList();
+        float dose = doseOrderedTilts.Count > 1
+            ? plan.Series.Dose[doseOrderedTilts[1]] - plan.Series.Dose[doseOrderedTilts[0]]
+            : plan.Series.Dose[doseOrderedTilts[0]];
+        int3 dimensions = RelionParticleSeriesExport.GetVirtualTomogramDimensions(plan.ExportOptions.DimensionsPhysical,
+            (float)plan.ExportOptions.BinnedPixelSizeMean);
+        return new Star(new[] { new[] { plan.Series.RootName + ".tomostar" }, new[] { "dummy.mrc" }, new[] { doseOrderedTilts.Count.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.X.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Y.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Z.ToString(CultureInfo.InvariantCulture) }, new[] { RelionParticleSeriesExport.GetRelionHand(plan.Series.AreAnglesInverted).ToString("F1", CultureInfo.InvariantCulture) }, new[] { $"opticsGroup{opticsGroup}" }, new[] { ((float)plan.ExportOptions.BinnedPixelSizeMean).ToString("F5", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Voltage.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Cs.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture) }, new[] { dose.ToString("F3", CultureInfo.InvariantCulture) } },
+            "rlnTomoName", "rlnTomoTiltSeriesName", "rlnTomoFrameCount", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ", "rlnTomoHand", "rlnOpticsGroupName", "rlnTomoTiltSeriesPixelSize", "rlnVoltage", "rlnSphericalAberration", "rlnAmplitudeContrast", "rlnTomoImportFractionalDose");
+    }
+
+    private static Star Build2DTomogramsTilts(SourcePlan plan)
+    {
+        Star table = new(new[] { "rlnTomoProjX", "rlnTomoProjY", "rlnTomoProjZ", "rlnTomoProjW", "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", "rlnPhaseShift", "rlnCtfScalefactor", "rlnMicrographPreExposure" });
+        float3[] angles = plan.Series.GetAngleInAllTilts(plan.ExportOptions.DimensionsPhysical * 0.5f);
+        foreach (int tilt in GetUsedTilts(plan))
+        {
+            Matrix3 matrix = Matrix3.Euler(angles[tilt]);
+            float3 imageCoords = plan.Series.GetPositionsInOneTilt(new[] { plan.ExportOptions.DimensionsPhysical * 0.5f }, tilt).First();
+            CTF ctf = plan.Series.GetCTFParamsForOneTilt((float)plan.ExportOptions.PixelSize, new[] { imageCoords.Z }, new[] { imageCoords }, tilt, true).First();
+            table.AddRow(new[] { $"[{matrix.M11},{matrix.M12},{matrix.M13},0]", $"[{matrix.M21},{matrix.M22},{matrix.M23},0]", $"[{matrix.M31},{matrix.M32},{matrix.M33},0]", "[0,0,0,1]", ((ctf.Defocus + ctf.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture), ((ctf.Defocus - ctf.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture), ctf.DefocusAngle.ToString("F3", CultureInfo.InvariantCulture), RelionParticleSeriesExport.GetPhaseShiftDegrees(ctf.PhaseShift).ToString("F3", CultureInfo.InvariantCulture), ctf.Scale.ToString("F3", CultureInfo.InvariantCulture), plan.Series.Dose[tilt].ToString("F3", CultureInfo.InvariantCulture) });
+        }
+        return table;
+    }
+
+    private static List<int> GetUsedTilts(SourcePlan plan)
+    {
+        List<int> tilts = plan.ExportOptions.DoLimitDose
+            ? plan.Series.IndicesSortedDose.Take(plan.ExportOptions.NTilts).ToList()
+            : plan.Series.IndicesSortedDose.ToList();
+        tilts.Sort();
+        return tilts;
+    }
+
     private static Star BuildOutputStar(IEnumerable<SourcePlan> plans, string outputStarPath, bool prerotate)
     {
         Star table = new(new[]
@@ -474,7 +661,7 @@ public sealed class SpeciesSubtomoExporter
     }
 
     private static void WriteMapping(string mappingPath, string populationPath, Species species,
-                                     IEnumerable<SourcePlan> plans, string outputStarPath)
+                                     IEnumerable<SourcePlan> plans, string outputStarPath, bool output2D)
     {
         Uri starUri = new(outputStarPath);
         List<MappingParticle> particles = new();
@@ -485,8 +672,8 @@ public sealed class SpeciesSubtomoExporter
             particles.Add(new MappingParticle
             {
                 export_index = exportIndex++,
-                image_name = starUri.MakeRelativeUri(new Uri(plan.SubtomoPaths[p])).ToString(),
-                ctf_image = starUri.MakeRelativeUri(new Uri(plan.CtfPaths[p])).ToString(),
+                image_name = starUri.MakeRelativeUri(new Uri(output2D ? plan.ParticleSeriesPaths[p] : plan.SubtomoPaths[p])).ToString(),
+                ctf_image = output2D ? null : starUri.MakeRelativeUri(new Uri(plan.CtfPaths[p])).ToString(),
                 source_hash = plan.Hash,
                 source_name = plan.Particles[p].SourceName,
                 species_particle_index = plan.SpeciesParticleIndices[p]

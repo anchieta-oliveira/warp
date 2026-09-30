@@ -59,4 +59,13 @@ public class RelionParticleSeriesExportTests
     {
         Assert.Equal(45M, RelionParticleSeriesExport.GetPhaseShiftDegrees(0.25M));
     }
+
+    [Theory]
+    [InlineData("[1,1,0,1]", 1, false)]
+    [InlineData("[1,0,0,1]", 1, true)]
+    [InlineData("[0,0,0]", 5, true)]
+    public void MissingTiltFilterExcludesEmptyAndOverLimitParticles(string frames, int limit, bool expected)
+    {
+        Assert.Equal(expected, RelionParticleSeriesExport.ShouldExcludeParticle(frames, limit));
+    }
 }

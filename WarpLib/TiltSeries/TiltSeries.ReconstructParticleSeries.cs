@@ -14,8 +14,11 @@ public partial class TiltSeries
     {
         bool IsCanceled = false;
 
-        if (!Directory.Exists(ParticleSeriesDir))
-            Directory.CreateDirectory(ParticleSeriesDir);
+        string particleSeriesDirectory = string.IsNullOrWhiteSpace(options.ParticleSeriesOutputDirectory)
+            ? ParticleSeriesDir
+            : options.ParticleSeriesOutputDirectory;
+        if (!Directory.Exists(particleSeriesDirectory))
+            Directory.CreateDirectory(particleSeriesDirectory);
 
         #region Dimensions
 
@@ -200,7 +203,8 @@ public partial class TiltSeries
             float3 Position0 = positions[p * NTilts + NTilts / 2] / (float)options.BinnedPixelSizeMean;
             float3 Angle0 = angles[p * NTilts + NTilts / 2];
 
-            string SeriesPath = System.IO.Path.Combine(ProcessingDirectoryName, ToParticleSeriesFilePath(RootName, options.BinnedPixelSizeMean, p + 1));
+            string SeriesPath = System.IO.Path.Combine(particleSeriesDirectory,
+                $"{RootName}_{options.BinnedPixelSizeMean:F2}A_{p + 1:D6}.mrcs");
             string SeriesPathRelative = Helper.MakePathRelativeTo(SeriesPath, tablePath);
 
             tableOut.AddRow(new string[]
@@ -239,7 +243,8 @@ public partial class TiltSeries
             for (int i = 0; i < UsedTilts.Count; i++)
                 Array.Copy(SumAllParticlesData[UsedTilts[i]], 0, AverageParticlesData[i], 0, SumAllParticlesData[0].Length);
 
-            string SumPath = System.IO.Path.Combine(ProcessingDirectoryName, ToParticleSeriesAveragePath(RootName, options.BinnedPixelSizeMean));
+            string SumPath = System.IO.Path.Combine(particleSeriesDirectory,
+                $"{RootName}_{options.BinnedPixelSizeMean:F2}A_average.mrcs");
             AverageParticles.WriteMRC16b(SumPath, (float)options.BinnedPixelSizeMean, true);
         }
 

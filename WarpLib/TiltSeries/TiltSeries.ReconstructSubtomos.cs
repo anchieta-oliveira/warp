@@ -16,8 +16,11 @@ public partial class TiltSeries
         if (options.UseCPU)
             Console.WriteLine("Using CPU");
 
-        if (!Directory.Exists(SubtomoDir))
-            Directory.CreateDirectory(SubtomoDir);
+        string subtomoDirectory = string.IsNullOrWhiteSpace(options.SubtomoOutputDirectory)
+            ? SubtomoDir
+            : options.SubtomoOutputDirectory;
+        if (!Directory.Exists(subtomoDirectory))
+            Directory.CreateDirectory(subtomoDirectory);
 
         #region Dimensions
 
@@ -203,7 +206,7 @@ public partial class TiltSeries
 
                 SumAllParticles[threadID].Add(VolumeCropped[threadID]);
 
-                VolumeCropped[threadID].WriteMRC16b(System.IO.Path.Combine(SubtomoDir, $"{RootName}{options.Suffix}_{p:D7}_{options.BinnedPixelSizeMean:F2}A.mrc"), (float)options.BinnedPixelSizeMean, true);
+                VolumeCropped[threadID].WriteMRC16b(System.IO.Path.Combine(subtomoDirectory, $"{RootName}{options.Suffix}_{p:D7}_{options.BinnedPixelSizeMean:F2}A.mrc"), (float)options.BinnedPixelSizeMean, true);
 
                 #endregion
 
@@ -270,7 +273,7 @@ public partial class TiltSeries
                     VolumeCTFCropped[threadID].Multiply(SubtomoSparsityMask[threadID]);
                 }
 
-                VolumeCTFCropped[threadID].WriteMRC16b(System.IO.Path.Combine(SubtomoDir, $"{RootName}{options.Suffix}_{p:D7}_ctf_{options.BinnedPixelSizeMean:F2}A.mrc"), (float)options.BinnedPixelSizeMean, true);
+                VolumeCTFCropped[threadID].WriteMRC16b(System.IO.Path.Combine(subtomoDirectory, $"{RootName}{options.Suffix}_{p:D7}_ctf_{options.BinnedPixelSizeMean:F2}A.mrc"), (float)options.BinnedPixelSizeMean, true);
 
                 #endregion
 
@@ -284,7 +287,7 @@ public partial class TiltSeries
                 SumAllParticles[0].Add(SumAllParticles[i]);
             SumAllParticles[0].Multiply(1f / Math.Max(1, positions.Length / NTilts));
 
-            SumAllParticles[0].WriteMRC16b(System.IO.Path.Combine(SubtomoDir, $"{RootName}{options.Suffix}_{options.BinnedPixelSizeMean:F2}A_average.mrc"), (float)options.BinnedPixelSizeMean, true);
+            SumAllParticles[0].WriteMRC16b(System.IO.Path.Combine(subtomoDirectory, $"{RootName}{options.Suffix}_{options.BinnedPixelSizeMean:F2}A_average.mrc"), (float)options.BinnedPixelSizeMean, true);
         }
 
         #region Teardown
@@ -343,6 +346,8 @@ public class ProcessingOptionsTomoSubReconstruction : TomoProcessingOptionsBase
     [WarpSerializable] public bool DoLimitDose { get; set; }
     [WarpSerializable] public int NTilts { get; set; }
     [WarpSerializable] public bool MakeSparse { get; set; }
+    [WarpSerializable] public string SubtomoOutputDirectory { get; set; }
+    [WarpSerializable] public string ParticleSeriesOutputDirectory { get; set; }
     [WarpSerializable] public bool UseCPU { get; set; }
     [WarpSerializable] public bool DontPremultiply { get; set; } = false;
 }

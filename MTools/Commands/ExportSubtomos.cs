@@ -29,6 +29,21 @@ namespace MTools.Commands
         [Option("task_dir", HelpText = "Filesystem work queue directory. Default: tasks next to --output.")]
         public string TaskDirectory { get; set; }
 
+        [Option("subtomo_dir", HelpText = "Root directory for native MRC outputs. One subdirectory per tilt series is created.")]
+        public string SubtomoDirectory { get; set; }
+
+        [Option("2d", HelpText = "Export RELION 2D particle series instead of 3D subtomograms.")]
+        public bool Output2D { get; set; }
+
+        [Option("particle_series_dir", HelpText = "Root directory for 2D particle-series MRC stacks. One subdirectory per tilt series is created.")]
+        public string ParticleSeriesDirectory { get; set; }
+
+        [Option("dont_premultiply", HelpText = "Do not premultiply 2D particle series by CTFs or RELION weights.")]
+        public bool DontPremultiply { get; set; }
+
+        [Option("max_missing_tilts", Default = 5, HelpText = "Exclude 2D particles missing more than this many selected tilts.")]
+        public int MaxMissingTilts { get; set; }
+
         [Option("angpix", HelpText = "Output pixel size in Angstrom. Default: Species.PixelSize.")]
         public decimal? AngPix { get; set; }
 
@@ -100,6 +115,11 @@ namespace MTools.Commands
                     Devices = cli.DeviceList?.ToArray(),
                     ProcessesPerDevice = cli.ProcessesPerDevice,
                     TaskDirectory = cli.TaskDirectory,
+                    SubtomoDirectory = cli.SubtomoDirectory,
+                    Output2D = cli.Output2D,
+                    ParticleSeriesDirectory = cli.ParticleSeriesDirectory,
+                    DontPremultiply = cli.DontPremultiply,
+                    MaxMissingTilts = cli.MaxMissingTilts,
                     OutputPixelSize = cli.AngPix,
                     BoxSize = cli.Box,
                     Diameter = cli.Diameter,

@@ -1086,104 +1086,10 @@ namespace WarpTools.Commands
 
             if (outputDimensionality == 2)
             {
-                #region combine info and write out particles.star
-
-                Star table2DMode =
-                    new StarParameters(new[] { "rlnTomoSubTomosAre2DStacks" },
-                                       new[] { "1" });
-                Star tableOpticsCombined = new Star(perTiltSeriesTables.Where(
-                                                                              kvp => kvp.Key.EndsWith("_optics")
-                                                                             ).ToDictionary(
-                                                                                            kvp => kvp.Key, kvp => kvp.Value
-                                                                                           ).Values.ToArray()
-                                                   );
-                Star tableParticles = new Star(perTiltSeriesTables.Where(
-                                                                         kvp => kvp.Key.EndsWith("_particles")
-                                                                        ).ToDictionary(
-                                                                                       kvp => kvp.Key, kvp => kvp.Value
-                                                                                      ).Values.ToArray()
-                                              );
-
-                // filter to remove particles not visible in more than --max_missing_tilts
-                // c.f. https://github.com/warpem/warp/issues/243
-                int nParticlesBeforeFiltering = tableParticles.RowCount;
-                tableParticles.RemoveRowsWhere(
-                                               columnName: "rlnTomoVisibleFrames",
-                                               match: s =>
-                                               {
-                                                   int[] visibility = s
-                                                                      .Trim('[', ']')
-                                                                      .Split(',')
-                                                                      .Select(int.Parse)
-                                                                      .ToArray();
-                                                   int nVisible = visibility.Count(value => value != 0);
-                                                   int nMissing = visibility.Length - nVisible;
-                                                   return nVisible == 0 || nMissing > maxMissingTilts;
-                                               }
-                                              );
-                int nParticlesAfterFiltering = tableParticles.RowCount;
-                if (Helper.IsDebug)
-                    Console.WriteLine($"{nParticlesBeforeFiltering} -> {nParticlesAfterFiltering} particles after removing particles not visible in more than {maxMissingTilts} tilt images");
-
-                // write file
-                Star.SaveMultitable(
-                                    particleStarPath, new Dictionary<string, Star>()
-                                    {
-                                        { "general", table2DMode },
-                                        { "optics", tableOpticsCombined },
-                                        { "particles", tableParticles }
-                                    }
-                                   );
-
-                #endregion
-
-                #region combine info and write out tomograms.star
-
-                // construct global table
-                Star tomogramsTableGlobalCombined = new Star(perTiltSeriesTables.Where(kvp => kvp.Key.EndsWith("_tomograms_global"))
-                                                                                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value).Values.ToArray());
-                string dummyTiltSeriesPath = Helper.PathCombine(particleStarDirectory, "dummy_tiltseries.mrc");
-                WriteDummyTiltSeries(path: dummyTiltSeriesPath);
-                tomogramsTableGlobalCombined.ModifyAllValuesInColumn(columnName: "rlnTomoTiltSeriesName",
-                                                                     f: v => Helper.MakePathRelativeTo(dummyTiltSeriesPath,
-                                                                                                       pathsRelativeTo));
-
-                // get per tilt-series tables
-                string tiltSeriesTableSuffix = "_tomograms_tiltseries";
-                var tomogramsTiltSeriesTables = perTiltSeriesTables.Where(kvp => kvp.Key.EndsWith(tiltSeriesTableSuffix))
-                                                                   .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-                // combine all and write out tomograms.star
-                Dictionary<string, Star> tomogramStarDict =
-                    new Dictionary<string, Star>()
-                    {
-                        { "global", tomogramsTableGlobalCombined },
-                    };
-                foreach (var kvp in tomogramsTiltSeriesTables)
-                {
-                    string rootName = kvp.Key.Substring(0, kvp.Key.Length - tiltSeriesTableSuffix.Length);
-                    tomogramStarDict.Add(rootName + ".tomostar", kvp.Value);
-                }
-
-                string tomogramsStarPath = Path.Combine(Helper.PathToFolder(particleStarPath),
-                                                        Helper.PathToName(particleStarPath) + "_tomograms.star");
-                Star.SaveMultitable(tomogramsStarPath, tomogramStarDict);
-
-                #endregion
-
-                #region write optimisation set
-
-                string particleFile = Helper.MakePathRelativeTo(particleStarPath, pathsRelativeTo);
-                string tomogramsFile = Helper.MakePathRelativeTo(tomogramsStarPath, pathsRelativeTo);
-                string optimisationSetPath = Path.Combine(particleStarDirectory,
-                                                          Helper.PathToName(particleStarPath) + "_optimisation_set.star");
-                string contents = "data_\n" +
-                                  "\n" +
-                                  $"_rlnTomoParticlesFile   {particleFile}\n" +
-                                  $"_rlnTomoTomogramsFile   {tomogramsFile}\n";
-                File.WriteAllText(path: optimisationSetPath, contents: contents);
-
-                #endregion
+                RelionParticleSeriesExport.WriteOutputFiles(perTiltSeriesTables,
+                                                            particleStarPath,
+                                                            maxMissingTilts,
+                                                            pathsRelativeTo);
 
             }
             else if (outputDimensionality == 3)
