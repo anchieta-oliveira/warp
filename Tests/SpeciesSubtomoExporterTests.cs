@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Warp.Sociology;
 using Warp.Tools;
 using Xunit;
@@ -39,5 +40,21 @@ public class SpeciesSubtomoExporterTests
         Assert.Equal(new float3(120, 0, 0), trajectories.Positions[5]);
         Assert.NotEqual(trajectories.Positions[0], trajectories.Positions[1]);
         Assert.NotEqual(trajectories.Angles[3], trajectories.Angles[4]);
+    }
+
+    [Fact]
+    public void OutputNamesDisambiguateDuplicateRootsOnly()
+    {
+        IReadOnlyDictionary<string, string> names = SpeciesSubtomoExporter.GetOutputNames(
+            new Dictionary<string, string>
+            {
+                ["0123456789abcdef"] = "Position_6_override",
+                ["fedcba9876543210"] = "Position_6_override",
+                ["uniquehash"] = "Position_7_override"
+            });
+
+        Assert.Equal("Position_6_override_0123456789abcdef", names["0123456789abcdef"]);
+        Assert.Equal("Position_6_override_fedcba9876543210", names["fedcba9876543210"]);
+        Assert.Equal("Position_7_override", names["uniquehash"]);
     }
 }

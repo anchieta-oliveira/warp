@@ -70,6 +70,7 @@ public sealed class SpeciesSubtomoExporter
         public float3[] Angles { get; init; }
         public string[] SubtomoPaths { get; init; }
         public string[] CtfPaths { get; init; }
+        public string OutputName { get; init; }
         public string SubtomoDirectory { get; init; }
         public string ParticleSeriesDirectory { get; init; }
         public string ParticleTablePath { get; init; }
@@ -94,6 +95,7 @@ public sealed class SpeciesSubtomoExporter
         public string ctf_image { get; init; }
         public string source_hash { get; init; }
         public string source_name { get; init; }
+        public string output_name { get; init; }
         public int species_particle_index { get; init; }
     }
 
@@ -153,6 +155,32 @@ public sealed class SpeciesSubtomoExporter
         }
 
         return (positions, angles);
+    }
+
+    /// <summary>
+    /// Preserves unique root names and disambiguates duplicate roots by source hash.
+    /// Source hashes are SHA-1 values, so the full hash is filesystem-safe and deterministic.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GetOutputNames(
+        IReadOnlyDictionary<string, string> rootNamesByHash)
+    {
+        if (rootNamesByHash == null)
+            throw new ArgumentNullException(nameof(rootNamesByHash));
+
+        Dictionary<string, int> rootCounts = new(StringComparer.Ordinal);
+        foreach (string rootName in rootNamesByHash.Values)
+            rootCounts[rootName] = rootCounts.TryGetValue(rootName, out int count) ? count + 1 : 1;
+
+        Dictionary<string, string> result = new(StringComparer.Ordinal);
+        foreach (var pair in rootNamesByHash)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+                throw new ArgumentException("Source hashes and root names must not be empty.", nameof(rootNamesByHash));
+
+            result.Add(pair.Key, rootCounts[pair.Value] == 1 ? pair.Value : pair.Value + "_" + pair.Key);
+        }
+
+        return result;
     }
 
     public Result Run(Options options, Action<string> status = null)
@@ -227,7 +255,7 @@ public sealed class SpeciesSubtomoExporter
         if (options.DryRun)
         {
             foreach (SourcePlan plan in plans)
-                status?.Invoke($"Would export {plan.Series.RootName}: {plan.Particles.Length} particles");
+                status?.Invoke($"Would export {plan.OutputName}: {plan.Particles.Length} particles");
             status?.Invoke("Validation OK.");
             return result;
         }
@@ -324,13 +352,27 @@ public sealed class SpeciesSubtomoExporter
             group.Add(i);
         }
 
+        Dictionary<string, TiltSeries> seriesByHash = new();
+        Dictionary<string, string> rootNamesByHash = new(StringComparer.Ordinal);
+        foreach (string hash in groups.Keys)
+        {
+            if (!sources.TryGetValue(hash, out var sourceFile))
+                throw new InvalidOperationException($"No tilt-series source exists for SourceHash '{hash}'.");
+
+            TiltSeries series = new(sourceFile.Path);
+            seriesByHash.Add(hash, series);
+            rootNamesByHash.Add(hash, series.RootName);
+        }
+        IReadOnlyDictionary<string, string> outputNames = GetOutputNames(rootNamesByHash);
+
         List<SourcePlan> result = new();
         foreach (var group in System.Linq.Enumerable.OrderBy(groups, g => g.Key, StringComparer.Ordinal))
         {
             if (!sources.TryGetValue(group.Key, out var sourceFile))
                 throw new InvalidOperationException($"No tilt-series source exists for SourceHash '{group.Key}'.");
 
-            TiltSeries series = new TiltSeries(sourceFile.Path);
+            TiltSeries series = seriesByHash[group.Key];
+            string outputName = outputNames[group.Key];
             if (series.GetDataHash() != group.Key)
                 throw new InvalidOperationException($"Tilt series '{series.Name}' no longer matches SourceHash '{group.Key}'.");
             if (series.NTilts < 1)
@@ -354,11 +396,11 @@ public sealed class SpeciesSubtomoExporter
                 nTilts = Math.Min(nTilts, sourceFile.Source.FrameLimit);
             nTilts = Math.Min(nTilts, series.NTilts);
             string subtomoDirectory = subtomoRoot == null
-                ? series.SubtomoDir
-                : Path.Combine(subtomoRoot, series.RootName);
+                ? (outputName == series.RootName ? series.SubtomoDir : Path.Combine(series.SubtomoDir, outputName))
+                : Path.Combine(subtomoRoot, outputName);
             string particleSeriesDirectory = particleSeriesRoot == null
-                ? Path.Combine(Path.GetDirectoryName(outputStarPath)!, "particle_series", series.RootName)
-                : Path.Combine(particleSeriesRoot, series.RootName);
+                ? Path.Combine(Path.GetDirectoryName(outputStarPath)!, "particle_series", outputName)
+                : Path.Combine(particleSeriesRoot, outputName);
 
             ProcessingOptionsTomoSubReconstruction exportOptions = new()
             {
@@ -424,9 +466,10 @@ public sealed class SpeciesSubtomoExporter
                 Angles = angles,
                 SubtomoPaths = subtomoPaths,
                 CtfPaths = ctfPaths,
+                OutputName = outputName,
                 SubtomoDirectory = subtomoDirectory,
                 ParticleSeriesDirectory = particleSeriesDirectory,
-                ParticleTablePath = Path.Combine(particleSeriesDirectory, series.RootName + "_temp.star"),
+                ParticleTablePath = Path.Combine(particleSeriesDirectory, outputName + "_temp.star"),
                 ParticleSeriesPaths = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
                     System.Linq.Enumerable.Range(0, particles.Length), p => Path.Combine(particleSeriesDirectory,
                         $"{series.RootName}_{exportOptions.BinnedPixelSizeMean:F2}A_{p + 1:D6}.mrcs")))
@@ -452,7 +495,7 @@ public sealed class SpeciesSubtomoExporter
         {
             TaskItem task = new()
             {
-                TaskId = $"{i + 1:D7}-export-{plan.Series.RootName}",
+                TaskId = $"{i + 1:D7}-export-{plan.OutputName}",
                 Stage = "export_subtomos",
                 RequiresGpu = true,
                 Main = new[]
@@ -486,7 +529,7 @@ public sealed class SpeciesSubtomoExporter
                 int done = Interlocked.Increment(ref completed);
                 if (result.Outcome != WorkOutcome.Done)
                     throw new InvalidOperationException($"Export failed for '{plan.Series.Name}': {result.Error}");
-                status?.Invoke($"[{done}/{plans.Count}] {plan.Series.RootName}: {plan.Particles.Length} particles");
+                status?.Invoke($"[{done}/{plans.Count}] {plan.OutputName}: {plan.Particles.Length} particles");
             }, pollMs: 500);
 
             WorkResult failed = System.Linq.Enumerable.FirstOrDefault(results.Values,
@@ -547,6 +590,8 @@ public sealed class SpeciesSubtomoExporter
                         $"Worker particle table has {particles.RowCount} rows, but {plan.Particles.Length} particles were planned.");
 
                 particles.ModifyAllValuesInColumn("rlnOpticsGroup", _ => group.ToString(CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnTomoName", _ => plan.OutputName + ".tomostar");
+                particles.ModifyAllValuesInColumn("rlnTomoParticleName", (_, i) => plan.OutputName + "/" + (i + 1));
                 float pixelSize = (float)plan.ExportOptions.BinnedPixelSizeMean;
                 particles.ModifyAllValuesInColumn("rlnCoordinateX", (_, i) =>
                     (plan.Particles[i].CoordinatesMean.X / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
@@ -584,14 +629,14 @@ public sealed class SpeciesSubtomoExporter
                 if (particles.HasColumn("rlnCtfDataAreCtfPremultiplied"))
                     particles.ModifyAllValuesInColumn("rlnCtfDataAreCtfPremultiplied", _ => options.DontPremultiply ? "0" : "1");
 
-                tables.Add(plan.Series.RootName + "_particles", particles);
-                tables.Add(plan.Series.RootName + "_optics", Build2DOptics(plan, group, !options.DontPremultiply));
-                tables.Add(plan.Series.RootName + "_tomograms_global", Build2DTomogramsGlobal(plan, group));
-                tables.Add(plan.Series.RootName + "_tomograms_tiltseries", Build2DTomogramsTilts(plan));
+                tables.Add(plan.OutputName + "_particles", particles);
+                tables.Add(plan.OutputName + "_optics", Build2DOptics(plan, group, !options.DontPremultiply));
+                tables.Add(plan.OutputName + "_tomograms_global", Build2DTomogramsGlobal(plan, group));
+                tables.Add(plan.OutputName + "_tomograms_tiltseries", Build2DTomogramsTilts(plan));
             }
             catch (Exception exception)
             {
-                throw new InvalidOperationException($"Failed to build RELION 2D metadata for tilt series '{plan.Series.RootName}'.", exception);
+                throw new InvalidOperationException($"Failed to build RELION 2D metadata for tilt series '{plan.OutputName}'.", exception);
             }
         }
         RelionParticleSeriesExport.WriteOutputFiles(tables, outputStarPath, options.MaxMissingTilts, outputStarPath);
@@ -627,7 +672,7 @@ public sealed class SpeciesSubtomoExporter
             : plan.Series.Dose[doseOrderedTilts[0]];
         int3 dimensions = RelionParticleSeriesExport.GetVirtualTomogramDimensions(plan.ExportOptions.DimensionsPhysical,
             (float)plan.ExportOptions.BinnedPixelSizeMean);
-        return new Star(new[] { new[] { plan.Series.RootName + ".tomostar" }, new[] { "dummy.mrc" }, new[] { doseOrderedTilts.Count.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.X.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Y.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Z.ToString(CultureInfo.InvariantCulture) }, new[] { RelionParticleSeriesExport.GetRelionHand(plan.Series.AreAnglesInverted).ToString("F1", CultureInfo.InvariantCulture) }, new[] { $"opticsGroup{opticsGroup}" }, new[] { ((float)plan.ExportOptions.BinnedPixelSizeMean).ToString("F5", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Voltage.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Cs.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture) }, new[] { dose.ToString("F3", CultureInfo.InvariantCulture) } },
+        return new Star(new[] { new[] { plan.OutputName + ".tomostar" }, new[] { "dummy.mrc" }, new[] { doseOrderedTilts.Count.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.X.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Y.ToString(CultureInfo.InvariantCulture) }, new[] { dimensions.Z.ToString(CultureInfo.InvariantCulture) }, new[] { RelionParticleSeriesExport.GetRelionHand(plan.Series.AreAnglesInverted).ToString("F1", CultureInfo.InvariantCulture) }, new[] { $"opticsGroup{opticsGroup}" }, new[] { ((float)plan.ExportOptions.BinnedPixelSizeMean).ToString("F5", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Voltage.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Cs.ToString("F3", CultureInfo.InvariantCulture) }, new[] { plan.Series.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture) }, new[] { dose.ToString("F3", CultureInfo.InvariantCulture) } },
             "rlnTomoName", "rlnTomoTiltSeriesName", "rlnTomoFrameCount", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ", "rlnTomoHand", "rlnOpticsGroupName", "rlnTomoTiltSeriesPixelSize", "rlnVoltage", "rlnSphericalAberration", "rlnAmplitudeContrast", "rlnTomoImportFractionalDose");
     }
 
@@ -708,6 +753,7 @@ public sealed class SpeciesSubtomoExporter
                 ctf_image = output2D ? null : starUri.MakeRelativeUri(new Uri(plan.CtfPaths[p])).ToString(),
                 source_hash = plan.Hash,
                 source_name = plan.Particles[p].SourceName,
+                output_name = plan.OutputName,
                 species_particle_index = plan.SpeciesParticleIndices[p]
             });
         }

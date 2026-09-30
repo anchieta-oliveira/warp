@@ -51,3 +51,7 @@ tilts are omitted from the final particle STAR. Random subsets and species extra
 columns are retained. `--subtomo_dir`, `--prerotate`, `--make_sparse`, and
 `--dont_normalize_output` are 3D-only; `--particle_series_dir`,
 `--dont_premultiply`, and non-default `--max_missing_tilts` are 2D-only.
+
+When a merged population contains different tilt series with the same root name,
+the exporter appends the source SHA-1 to their output directory and RELION tomogram
+name. Unique root names retain their existing paths.
