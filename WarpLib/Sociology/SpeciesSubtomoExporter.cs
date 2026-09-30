@@ -538,50 +538,61 @@ public sealed class SpeciesSubtomoExporter
         int opticsGroup = 0;
         foreach (SourcePlan plan in plans)
         {
-            int group = ++opticsGroup;
-            Star particles = new(plan.ParticleTablePath);
-            particles.ModifyAllValuesInColumn("rlnOpticsGroup", _ => group.ToString(CultureInfo.InvariantCulture));
-            float pixelSize = (float)plan.ExportOptions.BinnedPixelSizeMean;
-            particles.ModifyAllValuesInColumn("rlnCoordinateX", (_, i) =>
-                (plan.Particles[i].CoordinatesMean.X / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
-            particles.ModifyAllValuesInColumn("rlnCoordinateY", (_, i) =>
-                (plan.Particles[i].CoordinatesMean.Y / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
-            particles.ModifyAllValuesInColumn("rlnCoordinateZ", (_, i) =>
-                (plan.Particles[i].CoordinatesMean.Z / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
-            particles.ModifyAllValuesInColumn("rlnAngleRot", (_, i) =>
-                plan.Particles[i].AnglesMean.X.ToString("F3", CultureInfo.InvariantCulture));
-            particles.ModifyAllValuesInColumn("rlnAngleTilt", (_, i) =>
-                plan.Particles[i].AnglesMean.Y.ToString("F3", CultureInfo.InvariantCulture));
-            particles.ModifyAllValuesInColumn("rlnAnglePsi", (_, i) =>
-                plan.Particles[i].AnglesMean.Z.ToString("F3", CultureInfo.InvariantCulture));
-            string[] randomSubsets = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(plan.Particles, p =>
-                (p.RandomSubset + 1).ToString(CultureInfo.InvariantCulture)));
-            if (particles.HasColumn("rlnRandomSubset"))
-                particles.ModifyAllValuesInColumn("rlnRandomSubset", (_, i) => randomSubsets[i]);
-            else
-                particles.AddColumn("rlnRandomSubset", randomSubsets);
-            HashSet<string> extraColumns = new();
-            foreach (Particle particle in plan.Particles)
-                if (particle.Extra != null)
-                    foreach (string column in particle.Extra.Keys)
-                        extraColumns.Add(column);
-            foreach (string column in extraColumns)
-                if (!particles.HasColumn(column))
-                {
-                    string[] values = new string[plan.Particles.Length];
-                    for (int p = 0; p < plan.Particles.Length; p++)
-                        values[p] = plan.Particles[p].Extra != null && plan.Particles[p].Extra.TryGetValue(column, out string value)
-                            ? value
-                            : "?";
-                    particles.AddColumn(column, values);
-                }
-            if (particles.HasColumn("rlnCtfDataAreCtfPremultiplied"))
-                particles.ModifyAllValuesInColumn("rlnCtfDataAreCtfPremultiplied", _ => options.DontPremultiply ? "0" : "1");
+            try
+            {
+                int group = ++opticsGroup;
+                Star particles = new(plan.ParticleTablePath);
+                if (particles.RowCount != plan.Particles.Length)
+                    throw new InvalidOperationException(
+                        $"Worker particle table has {particles.RowCount} rows, but {plan.Particles.Length} particles were planned.");
 
-            tables.Add(plan.Series.RootName + "_particles", particles);
-            tables.Add(plan.Series.RootName + "_optics", Build2DOptics(plan, group, !options.DontPremultiply));
-            tables.Add(plan.Series.RootName + "_tomograms_global", Build2DTomogramsGlobal(plan, group));
-            tables.Add(plan.Series.RootName + "_tomograms_tiltseries", Build2DTomogramsTilts(plan));
+                particles.ModifyAllValuesInColumn("rlnOpticsGroup", _ => group.ToString(CultureInfo.InvariantCulture));
+                float pixelSize = (float)plan.ExportOptions.BinnedPixelSizeMean;
+                particles.ModifyAllValuesInColumn("rlnCoordinateX", (_, i) =>
+                    (plan.Particles[i].CoordinatesMean.X / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnCoordinateY", (_, i) =>
+                    (plan.Particles[i].CoordinatesMean.Y / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnCoordinateZ", (_, i) =>
+                    (plan.Particles[i].CoordinatesMean.Z / pixelSize).ToString("F3", CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnAngleRot", (_, i) =>
+                    plan.Particles[i].AnglesMean.X.ToString("F3", CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnAngleTilt", (_, i) =>
+                    plan.Particles[i].AnglesMean.Y.ToString("F3", CultureInfo.InvariantCulture));
+                particles.ModifyAllValuesInColumn("rlnAnglePsi", (_, i) =>
+                    plan.Particles[i].AnglesMean.Z.ToString("F3", CultureInfo.InvariantCulture));
+                string[] randomSubsets = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(plan.Particles, p =>
+                    (p.RandomSubset + 1).ToString(CultureInfo.InvariantCulture)));
+                if (particles.HasColumn("rlnRandomSubset"))
+                    particles.ModifyAllValuesInColumn("rlnRandomSubset", (_, i) => randomSubsets[i]);
+                else
+                    particles.AddColumn("rlnRandomSubset", randomSubsets);
+                HashSet<string> extraColumns = new();
+                foreach (Particle particle in plan.Particles)
+                    if (particle.Extra != null)
+                        foreach (string column in particle.Extra.Keys)
+                            extraColumns.Add(column);
+                foreach (string column in extraColumns)
+                    if (!particles.HasColumn(column))
+                    {
+                        string[] values = new string[plan.Particles.Length];
+                        for (int p = 0; p < plan.Particles.Length; p++)
+                            values[p] = plan.Particles[p].Extra != null && plan.Particles[p].Extra.TryGetValue(column, out string value)
+                                ? value
+                                : "?";
+                        particles.AddColumn(column, values);
+                    }
+                if (particles.HasColumn("rlnCtfDataAreCtfPremultiplied"))
+                    particles.ModifyAllValuesInColumn("rlnCtfDataAreCtfPremultiplied", _ => options.DontPremultiply ? "0" : "1");
+
+                tables.Add(plan.Series.RootName + "_particles", particles);
+                tables.Add(plan.Series.RootName + "_optics", Build2DOptics(plan, group, !options.DontPremultiply));
+                tables.Add(plan.Series.RootName + "_tomograms_global", Build2DTomogramsGlobal(plan, group));
+                tables.Add(plan.Series.RootName + "_tomograms_tiltseries", Build2DTomogramsTilts(plan));
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException($"Failed to build RELION 2D metadata for tilt series '{plan.Series.RootName}'.", exception);
+            }
         }
         RelionParticleSeriesExport.WriteOutputFiles(tables, outputStarPath, options.MaxMissingTilts, outputStarPath);
         foreach (SourcePlan plan in plans)

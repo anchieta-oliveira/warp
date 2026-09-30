@@ -144,7 +144,7 @@ namespace MTools.Commands
             }
             catch (Exception exception)
             {
-                Console.Error.WriteLine("ERROR: " + exception.Message);
+                Console.Error.WriteLine("ERROR: " + exception);
             }
         }
     }
