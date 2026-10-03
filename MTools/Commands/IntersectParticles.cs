@@ -53,6 +53,12 @@ namespace MTools.Commands
 
         [Option("apply", HelpText = "Replace species particles with the selected set. Without this flag, only report results.")]
         public bool Apply { get; set; }
+
+        [Option("new_name", HelpText = "Create the selected particles as a new top-level species with this name. Requires --apply.")]
+        public string NewName { get; set; }
+
+        [Option("output_species", HelpText = "Path for the new .species file. Requires --new_name.")]
+        public string OutputSpecies { get; set; }
     }
 
     class IntersectParticles : BaseCommand
@@ -74,6 +80,10 @@ namespace MTools.Commands
                     throw new ArgumentException("--tolerance must not be negative.");
                 if (!cli.KeepOnlyOld && !cli.KeepInBoth && !cli.KeepOnlyNew)
                     throw new ArgumentException("Specify at least one of --keep_only_old, --keep_in_both, or --keep_only_new.");
+                if (!string.IsNullOrWhiteSpace(cli.OutputSpecies) && string.IsNullOrWhiteSpace(cli.NewName))
+                    throw new ArgumentException("--output_species requires --new_name.");
+                if (!string.IsNullOrWhiteSpace(cli.NewName) && string.IsNullOrWhiteSpace(Helper.RemoveInvalidChars(cli.NewName)))
+                    throw new ArgumentException("--new_name must contain at least one valid filename character.");
 
                 Population population = new Population(cli.Population);
                 Species species = ResolveSpecies(population, cli.Species);
@@ -97,20 +107,36 @@ namespace MTools.Commands
                 Console.WriteLine($"In both: {inBoth}");
                 Console.WriteLine($"Only new: {imported.Length - inBoth}");
                 Console.WriteLine($"Selected: {selected.Length}");
+                if (!string.IsNullOrWhiteSpace(cli.NewName))
+                {
+                    string nameSafe = Helper.RemoveInvalidChars(cli.NewName);
+                    string plannedPath = string.IsNullOrWhiteSpace(cli.OutputSpecies)
+                        ? Path.Combine(population.SpeciesDir, nameSafe + "_<new-guid>", nameSafe + ".species")
+                        : Path.GetFullPath(cli.OutputSpecies);
+                    Console.WriteLine("Output mode: new independent species");
+                    Console.WriteLine($"New species: {cli.NewName}");
+                    Console.WriteLine($"Path: {plannedPath}");
+                }
 
                 if (!cli.Apply)
                 {
-                    Console.WriteLine("Report only; use --apply to replace the species particle set.");
+                    Console.WriteLine("Report only; use --apply to write the selected particle set.");
                     return;
                 }
                 if (selected.Length == 0)
                     throw new InvalidOperationException("Refusing to apply an empty particle selection.");
 
-                species.ReplaceParticles(selected);
-                species.CalculateParticleStats();
-                species.Commit();
-                species.Save();
-                Console.WriteLine("Applied selected particles.");
+                if (string.IsNullOrWhiteSpace(cli.NewName))
+                {
+                    species.ReplaceParticles(selected);
+                    species.CalculateParticleStats();
+                    species.Commit();
+                    species.Save();
+                    Console.WriteLine("Applied selected particles.");
+                    return;
+                }
+
+                CreateSelectedSpecies(population, species, selected, cli.NewName, cli.OutputSpecies);
             }
             catch (Exception exception)
             {
@@ -243,6 +269,54 @@ namespace MTools.Commands
             if (matches.Length == 1) return matches[0];
             if (matches.Length == 0) throw new InvalidOperationException($"No species matched '{selector}'.");
             throw new InvalidOperationException($"More than one species matched '{selector}'.");
+        }
+
+        private static void CreateSelectedSpecies(Population population, Species original, Particle[] selected, string name, string outputPath)
+        {
+            string nameSafe = Helper.RemoveInvalidChars(name);
+            if (population.Species.SelectMany(s => s.AllDescendants).Any(s => s.Name.Equals(name, StringComparison.Ordinal)))
+                throw new InvalidOperationException($"A species named '{name}' already exists in this population.");
+
+            Guid newGUID = Guid.NewGuid();
+            string path = string.IsNullOrWhiteSpace(outputPath)
+                ? Path.Combine(population.SpeciesDir, nameSafe + "_" + newGUID.ToString().Substring(0, 8), nameSafe + ".species")
+                : Path.GetFullPath(outputPath);
+            string folder = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The output species path must include a directory.");
+            if (File.Exists(path) || Directory.Exists(folder))
+                throw new InvalidOperationException($"New species destination already exists: {path}");
+            if (IsSameOrDescendant(folder, original.FolderPath))
+                throw new InvalidOperationException("The new species destination cannot be inside the original species folder.");
+
+            bool registered = false;
+            bool createdDirectory = false;
+            try
+            {
+                Directory.CreateDirectory(folder);
+                createdDirectory = true;
+                Species created = original.CreateIndependentTopLevelCopy(name, path, selected, newGUID);
+                created.CalculateParticleStats();
+                // Do not Commit: the clone intentionally has no version history or versions/ snapshot.
+                created.Save();
+
+                population.Species.Add(created);
+                registered = true;
+                population.Save();
+                Console.WriteLine($"Created selected species: '{created.Name}' ({created.GUID}), {created.Path}");
+            }
+            catch
+            {
+                if (!registered && createdDirectory && Directory.Exists(folder))
+                    Directory.Delete(folder, true);
+                throw;
+            }
+        }
+
+        private static bool IsSameOrDescendant(string candidate, string parent)
+        {
+            string candidateFull = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string parentFull = Path.GetFullPath(parent).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return candidateFull.Equals(parentFull, StringComparison.OrdinalIgnoreCase) ||
+                   candidateFull.StartsWith(parentFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

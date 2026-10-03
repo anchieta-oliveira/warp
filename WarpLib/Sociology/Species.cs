@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
@@ -972,6 +973,60 @@ namespace Warp.Sociology
         public void ReplaceParticles(Particle[] newParticles)
         {
             Particles = newParticles;
+        }
+
+        /// <summary>
+        /// Creates a standalone species with the same persisted settings and current map
+        /// artifacts, but with a new identity and the supplied particle selection.
+        /// </summary>
+        public Species CreateIndependentTopLevelCopy(string name, string path, Particle[] particles, Guid? guid = null)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("A new species name is required.", nameof(name));
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A destination species path is required.", nameof(path));
+
+            Species copy = new Species();
+            foreach (PropertyInfo property in GetType().GetProperties().Where(p => p.GetCustomAttribute(typeof(WarpSerializable)) != null && p.CanWrite))
+            {
+                if (property.Name is nameof(GUID) or nameof(Version) or nameof(PreviousVersion) or nameof(Name))
+                    continue;
+                property.SetValue(copy, property.GetValue(this));
+            }
+
+            copy.Name = name;
+            copy.Path = path;
+            copy.GUID = guid ?? Guid.NewGuid();
+            copy.Version = "";
+            copy.PreviousVersion = "";
+            copy.UsedDataSources = new Dictionary<Guid, string>(UsedDataSources);
+            copy.ReplaceParticles((particles ?? []).Select(p => p.GetCopy()).ToArray());
+
+            Directory.CreateDirectory(copy.FolderPath);
+            CopyCurrentArtifactsTo(copy);
+            return copy;
+        }
+
+        private void CopyCurrentArtifactsTo(Species destination)
+        {
+            string[] sourcePaths =
+            [
+                PathHalfMap1, PathHalfMap2, PathMask,
+                PathMapFiltered, PathMapFilteredSharpened, PathMapFilteredAnisotropic, PathMapLocallyFiltered, PathMapDenoised,
+                PathAngularDist, PathGlobalFSC, PathLocalResolution, PathResolutionHistogram, PathLocalBFactor, PathAnisoResolution,
+                PathNoiseNet
+            ];
+            string[] destinationPaths =
+            [
+                destination.PathHalfMap1, destination.PathHalfMap2, destination.PathMask,
+                destination.PathMapFiltered, destination.PathMapFilteredSharpened, destination.PathMapFilteredAnisotropic, destination.PathMapLocallyFiltered, destination.PathMapDenoised,
+                destination.PathAngularDist, destination.PathGlobalFSC, destination.PathLocalResolution, destination.PathResolutionHistogram, destination.PathLocalBFactor, destination.PathAnisoResolution,
+                destination.PathNoiseNet
+            ];
+
+            for (int i = 0; i < sourcePaths.Length; i++)
+                if (File.Exists(sourcePaths[i]))
+                    File.Copy(sourcePaths[i], destinationPaths[i]);
         }
 
         public static bool IsReservedParticleColumn(string name)

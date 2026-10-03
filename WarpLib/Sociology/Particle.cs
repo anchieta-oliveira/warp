@@ -196,7 +196,7 @@ namespace Warp.Sociology
 
         public Particle GetCopy()
         {
-            return new Particle(Coordinates.ToArray(), Angles.ToArray(), RandomSubset, SourceName, SourceHash)
+            return new Particle(Coordinates.ToArray(), Angles.ToArray(), RandomSubset, SourceName, SourceHash, FOM)
             {
                 Extra = new Dictionary<string, string>(Extra)
             };

@@ -8,7 +8,7 @@ namespace Warp.Sociology
     /// <summary>Matches particle sets independently for each source hash.</summary>
     public static class ParticleSetIntersection
     {
-        public sealed class Match
+        public sealed class ParticleMatch
         {
             public int OldIndex { get; init; }
             public int NewIndex { get; init; }
@@ -19,7 +19,7 @@ namespace Warp.Sociology
         {
             public float[] OldDistances { get; init; }
             public float[] NewDistances { get; init; }
-            public Match[] Matches { get; init; }
+            public ParticleMatch[] Matches { get; init; }
         }
 
         public static Result Match(Particle[] oldParticles, Particle[] newParticles)
@@ -31,7 +31,7 @@ namespace Warp.Sociology
 
             float[] oldDistances = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Repeat(-1f, oldParticles.Length));
             float[] newDistances = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Repeat(-1f, newParticles.Length));
-            List<Match> matches = new List<Match>();
+            List<ParticleMatch> matches = new List<ParticleMatch>();
 
             Dictionary<string, List<int>> oldBySource = GroupBySource(oldParticles);
             Dictionary<string, List<int>> newBySource = GroupBySource(newParticles);
@@ -62,7 +62,7 @@ namespace Warp.Sociology
                     float distance = distances[oldLocal][newLocal];
                     oldDistances[oldIndex] = distance;
                     newDistances[newIndex] = distance;
-                    matches.Add(new Match { OldIndex = oldIndex, NewIndex = newIndex, Distance = distance });
+                    matches.Add(new ParticleMatch { OldIndex = oldIndex, NewIndex = newIndex, Distance = distance });
                 }
             }
 

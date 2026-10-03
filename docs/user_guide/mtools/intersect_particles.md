@@ -23,5 +23,17 @@ from `export_subtomos`, pass its `_mapping.json` with `--mapping` to resolve eac
 `output_name` to its source hash. Unresolvable input rows fail by default; use
 `--ignore_unmatched` to omit them.
 
-`--apply` refuses an empty selection. On success it calls `ReplaceParticles`,
-`CalculateParticleStats`, `Commit`, and `Save` on the selected species.
+`--apply` refuses an empty selection. Without `--new_name`, it calls
+`ReplaceParticles`, `CalculateParticleStats`, `Commit`, and `Save` on the
+selected species.
+
+Pass `--new_name NAME` to plan a new independent top-level species; add `--apply`
+to create it and register it in the same population while leaving the input species
+unchanged. By default its path is
+`<Population.SpeciesDir>/<NameSafe>_<GUID-8>/<NameSafe>.species`; use
+`--output_species PATH` to choose a different new destination (it requires
+`--new_name`). Existing species names and destinations are rejected, as is a
+destination under the original species folder. The new species has a new GUID and
+no version history, retains the original settings, used data sources, maps, mask,
+and denoiser artifact, and writes the selected particle STAR plus fresh particle
+statistics without recalculating map resolution or training a denoiser.
