@@ -351,91 +351,12 @@ namespace M.Controls.Sociology.Dialogs
 
                 if (ParticlesNew != null && ParticlesNew.Length > 0)
                 {
-                    bool[] MatchFoundOld = new bool[ParticlesOld.Length];
-                    bool[] MatchFoundNew = new bool[ParticlesNew.Length];
-                    ClosestDistanceOld = Helper.ArrayOfConstant(-1f, ParticlesOld.Length);
-                    ClosestDistanceNew = Helper.ArrayOfConstant(-1f, ParticlesNew.Length);
+                    ParticleSetIntersection.Result Matching = ParticleSetIntersection.Match(ParticlesOld, ParticlesNew);
+                    ClosestDistanceOld = Matching.OldDistances;
+                    ClosestDistanceNew = Matching.NewDistances;
 
-                    Dictionary<string, (List<Particle>, List<int>)> GroupedOld = new Dictionary<string, (List<Particle>, List<int>)>();
-                    Dictionary<string, (List<Particle>, List<int>)> GroupedNew = new Dictionary<string, (List<Particle>, List<int>)>();
-
-                    for (int i = 0; i < ParticlesOld.Length; i++)
-                    {
-                        string Hash = ParticlesOld[i].SourceHash;
-                        if (!GroupedOld.ContainsKey(Hash))
-                            GroupedOld.Add(Hash, (new List<Particle>(), new List<int>()));
-                        GroupedOld[Hash].Item1.Add(ParticlesOld[i]);
-                        GroupedOld[Hash].Item2.Add(i);
-                    }
-
-                    for (int i = 0; i < ParticlesNew.Length; i++)
-                    {
-                        string Hash = ParticlesNew[i].SourceHash;
-                        if (!GroupedNew.ContainsKey(Hash))
-                            GroupedNew.Add(Hash, (new List<Particle>(), new List<int>()));
-                        GroupedNew[Hash].Item1.Add(ParticlesNew[i]);
-                        GroupedNew[Hash].Item2.Add(i);
-                    }
-
-                    Parallel.ForEach(GroupedNew, pair =>
-                    {
-                        if (!GroupedOld.ContainsKey(pair.Key))
-                            return;
-
-                        List<Particle> Old = GroupedOld[pair.Key].Item1;
-                        List<int> OldIDs = GroupedOld[pair.Key].Item2;
-                        List<Particle> New = pair.Value.Item1;
-                        List<int> NewIDs = pair.Value.Item2;
-
-                        float[][] DistanceMatrix = new float[Old.Count][];
-
-                        for (int i1 = 0; i1 < Old.Count; i1++)
-                        {
-                            float BestDistance = float.MaxValue;
-                            int BestID = -1;
-                            float3 P1 = Old[i1].Coordinates[0];
-
-                            DistanceMatrix[i1] = new float[New.Count];
-
-                            for (int i2 = 0; i2 < New.Count; i2++)
-                            {
-                                float3 P2 = New[i2].Coordinates[0];
-                                float Distance2 = (P2 - P1).Length();
-
-                                DistanceMatrix[i1][i2] = Distance2;
-
-                                //if (Distance2 < BestDistance)
-                                //{
-                                //    BestDistance = Distance2;
-                                //    BestID = OldIDs[i2];
-                                //}
-                            }
-
-                            //BestDistance = (float)Math.Sqrt(BestDistance);
-
-                            //if (BestID >= 0)
-                            //{
-                            //    ClosestDistanceOld[BestID] = BestDistance;
-                            //    ClosestDistanceNew[NewIDs[i1]] = BestDistance;
-                            //}
-                        }
-
-                        HungarianAlgorithm Bla = new HungarianAlgorithm(DistanceMatrix);
-                        int[] Matching = Bla.execute();
-
-                        for (int i1 = 0; i1 < Matching.Length; i1++)
-                        {
-                            if (Matching[i1] < 0)
-                                continue;
-
-                            int i2 = Matching[i1];
-                            ClosestDistanceOld[OldIDs[i1]] = DistanceMatrix[i1][i2];
-                            ClosestDistanceNew[NewIDs[i2]] = DistanceMatrix[i1][i2];
-                        }
-                    });
-
-                    IEnumerable<float> ValidDistances = ClosestDistanceNew.Where(v => v >= 0);
-                    MaxDistance = Math.Max(1, MathHelper.Max(ValidDistances));
+                    float[] ValidDistances = ClosestDistanceNew.Where(v => v >= 0).ToArray();
+                    MaxDistance = ValidDistances.Length == 0 ? 1 : Math.Max(1, MathHelper.Max(ValidDistances));
 
                     float[] HistogramBins = new float[NBins];
                     foreach (var d in ValidDistances)
@@ -512,22 +433,12 @@ namespace M.Controls.Sociology.Dialogs
             TextIntersected.Text = (ValidDistances.Count()).ToString();
             TextExclusiveNew.Text = (ParticlesNew.Length - ValidDistances.Count()).ToString();
 
-            List<Particle> ParticlesFinalList = new List<Particle>(ParticlesOld.Length);
             bool IncludeOld = (bool)CheckSetOld.IsChecked;
             bool IncludeIntersection = (bool)CheckSetBoth.IsChecked;
             bool IncludeNew = (bool)CheckSetNew.IsChecked;
-
-            for (int i = 0; i < ParticlesOld.Length; i++)
-                if (((ClosestDistanceOld[i] < 0 || ClosestDistanceOld[i] > (float)ToleranceDistance + 1e-6f) && IncludeOld) || 
-                    (ClosestDistanceOld[i] >= 0 && ClosestDistanceOld[i] <= (float)ToleranceDistance + 1e-6f && IncludeIntersection))
-                    ParticlesFinalList.Add(ParticlesOld[i]);
-
-            for (int i = 0; i < ParticlesNew.Length; i++)
-                if ((ClosestDistanceNew[i] < 0 || ClosestDistanceNew[i] > (float)ToleranceDistance + 1e-6f) && IncludeNew)
-                    ParticlesFinalList.Add(ParticlesNew[i]);
-
-            ParticlesFinalList.Sort((a, b) => a.SourceHash.CompareTo(b.SourceHash));
-            ParticlesFinal = ParticlesFinalList.ToArray();
+            ParticlesFinal = ParticleSetIntersection.Select(ParticlesOld, ParticlesNew,
+                new ParticleSetIntersection.Result { OldDistances = ClosestDistanceOld, NewDistances = ClosestDistanceNew },
+                (float)ToleranceDistance, IncludeOld, IncludeIntersection, IncludeNew);
         }
 
         bool ValidateParticles()
